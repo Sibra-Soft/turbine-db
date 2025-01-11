@@ -1,0 +1,21 @@
+{
+    "authors": [
+        {
+            "email": "alex@sibra-soft.nl",
+            "name": "Alex van den Berg"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "TurbineDb\\": "src/"
+        }
+    },
+    "description": "Framework for connecting to databases",
+    "license": "MIT",
+    "name": "sibra-soft/turbine-db",
+    "require": {
+        "hassankhan/config": "^3.2"
+    },
+    "type": "library",
+    "version": "1.0.0"
+}
