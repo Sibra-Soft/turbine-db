@@ -3,7 +3,7 @@ namespace TurbineDb\Interfaces;
 
 interface IQueryBuilderService
 {
-    public function Clear();
+    public function NewQuery();
     public function Insert(string $table, string $column, $value);
     public function Delete(string $table);
     public function Update(string $table, string $column, $value);

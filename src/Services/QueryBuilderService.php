@@ -1,6 +1,8 @@
 <?php
 namespace TurbineDb\Services;
 
+use InvalidArgumentException;
+
 use TurbineDb\Enums\QueryOperatorsEnum;
 use TurbineDb\Helpers\StringHelpers;
 use TurbineDb\Interfaces\IQueryBuilderService;
@@ -8,21 +10,24 @@ use TurbineDb\Interfaces\IQueryBuilderService;
 class QueryBuilderService implements IQueryBuilderService
 {
     protected $queryConstructor = [];
+    protected $tables = [];
 
     public bool $ignoreDuplicatesOnInsert = false;
 
     /**
-     * Clears the constructor
+     * Start with a empty querybuilder
      */
-    public function Clear(){
+    public function NewQuery(){
+        $this->tables = [];
         $this->queryConstructor = [
             "0_STATEMENT" => "SELECT",
             "1_DATA" => ["SELECT" => "*"],
             "2_FROM" => "",
-            "3_WHERE" => [],
-            "4_GROUP_BY" => "",
-            "5_ORDER_BY" => "",
-            "6_LIMIT" => 0
+            "3_JOINS" => [],
+            "4_WHERE" => [],
+            "5_GROUP_BY" => "",
+            "6_ORDER_BY" => "",
+            "7_LIMIT" => 0
         ];
     }
 
@@ -76,7 +81,9 @@ class QueryBuilderService implements IQueryBuilderService
     public function Select(string $table, string $columns = "*"){
         $this->queryConstructor["0_STATEMENT"] = "SELECT";
         $this->queryConstructor["1_DATA"]["SELECT"] = $columns;
-        $this->queryConstructor["2_FROM"] = $table;
+        $this->queryConstructor["2_FROM"] = $this->ConstructAlias($table);
+
+        $this->tables[] = $this->ConstructAlias($table);
     }
 
     /**
@@ -97,8 +104,8 @@ class QueryBuilderService implements IQueryBuilderService
             $extendWith = "";
         }
 
-        $whereStatementCount = count((array)$this->queryConstructor["3_WHERE"]);
-        $this->queryConstructor["3_WHERE"][$whereStatementCount.";".$extendWith] = [$column.";".$operator => $value];
+        $whereStatementCount = count((array)$this->queryConstructor["4_WHERE"]);
+        $this->queryConstructor["4_WHERE"][$whereStatementCount.";".$extendWith] = [$column.";".$operator => $value];
     }
 
     /**
@@ -107,7 +114,7 @@ class QueryBuilderService implements IQueryBuilderService
      * @param string $direction
      */
     public function Order(string $column, string $direction){
-        $this->queryConstructor["5_ORDER_BY"] = [$direction => $column];
+        $this->queryConstructor["6_ORDER_BY"] = [$direction => $column];
     }
 
     /**
@@ -116,7 +123,7 @@ class QueryBuilderService implements IQueryBuilderService
      * @param integer $maxItems The amount of items to display, `0` means unlimited
      */
     public function Limit(int $maxItems = 0){
-        $this->queryConstructor["6_LIMIT"] = $maxItems;
+        $this->queryConstructor["7_LIMIT"] = $maxItems;
     }
 
     /**
@@ -128,20 +135,67 @@ class QueryBuilderService implements IQueryBuilderService
     public function Pagination(int $amount, int $page){
         $pageEndAmount = ($page - 1) * $amount;
 
-        $this->queryConstructor["6_LIMIT"] = $pageEndAmount.",".$amount;
+        $this->queryConstructor["7_LIMIT"] = $pageEndAmount.",".$amount;
+    }
+
+    /**
+     * Add a table as InnerJoin within the query
+     * @param string $table Name of the table and alias (example `table:alias`)
+     * @param array $criteria Array of criteria to use for the join
+     * @throws InvalidArgumentException When no alias is specified
+     */
+    public function Join(string $table, array $criteria){
+        if(!StringHelpers::Contains($table, ":")) throw new InvalidArgumentException("Tables must is aliased when using Join or LeftJoin");
+
+        $this->queryConstructor["3_JOINS"]["INNER"][$table] = $criteria;
+
+        $this->tables[] = $this->ConstructAlias($table);
+    }
+
+    /**
+     * Add a table as LeftJoin within the query
+     * @param string $table Name of the table and alias (example `table:alias`)
+     * @param array $criteria Array of criteria to use for the join
+     * @throws InvalidArgumentException When no alias is specified
+     */
+    public function LeftJoin(string $table, array $criteria){
+        if(!StringHelpers::Contains($table, ":")) throw new InvalidArgumentException("Tables must is aliased when using Join or LeftJoin");
+
+        $this->queryConstructor["3_JOINS"]["LEFT"][$table] = $criteria;
+
+        $this->tables[] = $this->ConstructAlias($table);
+    }
+
+    /**
+     * Construct the table and a alias if given
+     * @param string $value Value containing the table an possible alias
+     * @return string The tablename and alias if given
+     */
+    private function ConstructAlias(string $value): string {
+        $alias = "";
+        $table = "";
+
+        if(StringHelpers::Contains($value, ":")) {
+            $alias = " AS ".StringHelpers::SplitString($value, ":", 1);
+            $table = StringHelpers::SplitString($value, ":", 0);
+        }else{
+            $table = $value;
+        }
+
+        return $table.$alias;
     }
 
     /**
      * This function constructs the where clause based on the specified where statements
      * @return string
      */
-    private function ConstructWhereClause(){
+    private function ConstructWhereClause(): string {
         $constructor = "";
 
         // Check if where statements have been added
-        if(count((array)$this->queryConstructor["3_WHERE"]) > 0){
+        if(count((array)$this->queryConstructor["4_WHERE"]) > 0){
             $index = 0;
-            foreach((array)$this->queryConstructor["3_WHERE"] as $where){
+            foreach((array)$this->queryConstructor["4_WHERE"] as $where){
                 $column = StringHelpers::SplitString(key($where), ";", 0);
                 $value = $where[key($where)];
                 $operator = StringHelpers::SplitString(key($where), ";", 1);
@@ -149,7 +203,7 @@ class QueryBuilderService implements IQueryBuilderService
                 if($index == 0){
                     $constructor .= "WHERE";
                 }else{
-                    $key = array_keys((array)$this->queryConstructor["3_WHERE"])[$index];
+                    $key = array_keys((array)$this->queryConstructor["4_WHERE"])[$index];
                     $extender = trim(StringHelpers::SplitString($key, ";", 1));
 
                     if($extender === "AND"){
@@ -185,37 +239,94 @@ class QueryBuilderService implements IQueryBuilderService
      * This function constructs the select statements
      * @return string
      */
-    private function ConstructSelectQuery(){
+    private function ConstructSelectQuery(): string {
         $constructor = "";
 
+        $selectColumns = $this->queryConstructor["1_DATA"]["SELECT"];
+
+        // Get all the columns to return
+        if($selectColumns === "*" and count($this->tables) > 1){
+            $selectColumns = "";
+
+            foreach($this->tables as $table){
+                $aliasName = trim(StringHelpers::SplitString($table, "AS", 1));
+
+                $selectColumns .= $aliasName.".*,";
+            }
+
+            $selectColumns = rtrim($selectColumns, ',');
+        }
+
         // Construct the query
-        $constructor .= "SELECT ".$this->queryConstructor["1_DATA"]["SELECT"];
+        $constructor .= "SELECT ".$selectColumns;
         $constructor .= " ";
         $constructor .= "FROM ".$this->queryConstructor["2_FROM"];
-        $constructor .= " ";
 
+        // Construct the joins of the query
+        foreach($this->queryConstructor["3_JOINS"] as $type => $joins){
+            switch($type){
+                case "INNER":
+                    foreach($joins as $table => $criteria){
+                        $constructor .= " INNER JOIN ".$this->ConstructAlias($table);
+                        $constructor .= " ON ";
+
+                        $i = 0;
+                        foreach($criteria as $column => $value){
+                            if($i > 0){
+                                $constructor .= " AND ".$column." = ".$value;
+                            }else{
+                                $constructor .= $column." = ".$value;
+                            }
+
+                            $i++;
+                        }
+                    }
+                    break;
+
+                case "LEFT":
+                    foreach($joins as $table => $criteria){
+                        $constructor .= " LEFT JOIN ".$this->ConstructAlias($table);
+                        $constructor .= " ON ";
+
+                        $i = 0;
+                        foreach($criteria as $column => $value){
+                            if($i > 0){
+                                $constructor .= " AND ".$column." = ".$value;
+                            }else{
+                                $constructor .= $column." = ".$value;
+                            }
+
+                            $i++;
+                        }
+                    }
+                    break;
+            }
+        }
+
+        // Construct the where part of the query
+        $constructor .= " ";
         $constructor .= $this->ConstructWhereClause();
 
         // Add GroupBy, Order, Limit, etc.
         $constructor .= " ";
 
         // Check if we must add a GroupBy
-        if(!StringHelpers::IsNullOrWhiteSpace($this->queryConstructor["4_GROUP_BY"])){
-            $constructor .= "GROUP BY ".$this->queryConstructor["4_GROUP_BY"];
+        if(!StringHelpers::IsNullOrWhiteSpace($this->queryConstructor["5_GROUP_BY"])){
+            $constructor .= "GROUP BY ".$this->queryConstructor["5_GROUP_BY"];
             $constructor .= " ";
         }
 
         // Check if we must add a OrderBy
-        if(!StringHelpers::IsNullOrWhiteSpace($this->queryConstructor["5_ORDER_BY"])){
-            $orderByDirection = key((array)$this->queryConstructor["5_ORDER_BY"]);
-            $orderByColumn = $this->queryConstructor["5_ORDER_BY"][$orderByDirection];
+        if(!StringHelpers::IsNullOrWhiteSpace($this->queryConstructor["6_ORDER_BY"])){
+            $orderByDirection = key((array)$this->queryConstructor["6_ORDER_BY"]);
+            $orderByColumn = $this->queryConstructor["6_ORDER_BY"][$orderByDirection];
 
             $constructor .= "ORDER BY ".$orderByColumn." ".$orderByDirection;
             $constructor .= " ";
         }
 
-        if($this->queryConstructor["6_LIMIT"] !== 0){
-            $constructor .= "LIMIT ".$this->queryConstructor["6_LIMIT"];
+        if($this->queryConstructor["7_LIMIT"] > 0){
+            $constructor .= "LIMIT ".$this->queryConstructor["7_LIMIT"];
         }
 
         return $constructor;
@@ -225,7 +336,7 @@ class QueryBuilderService implements IQueryBuilderService
      * This function constructs the insert statement
      * @return string
      */
-    private function ConstructInsertQuery(){
+    private function ConstructInsertQuery(): string {
         $constructor = "";
 
         // Construct the query
@@ -261,7 +372,7 @@ class QueryBuilderService implements IQueryBuilderService
      * This function constructs the update statement
      * @return string
      */
-    private function ConstructUpdateQuery(){
+    private function ConstructUpdateQuery(): string {
         $constructor = "";
 
         // Construct the query
@@ -289,13 +400,13 @@ class QueryBuilderService implements IQueryBuilderService
      * This function constructs the delete query
      * @return string
      */
-    private function ConstructDeleteQuery(){
+    private function ConstructDeleteQuery(): string {
         $constructor = "";
 
         $constructor .= "DELETE FROM ".$this->queryConstructor["2_FROM"]." ";
         $constructor .= $this->ConstructWhereClause();
 
-        if(count((array)$this->queryConstructor["3_WHERE"]) == 0){
+        if(count((array)$this->queryConstructor["4_WHERE"]) == 0){
             echo("You must specify a where statement when using the delete function");
             exit();
         }
@@ -307,13 +418,12 @@ class QueryBuilderService implements IQueryBuilderService
      * This function will render the query and all it's specified statements
      * @return string
      */
-    public function Render(){
+    public function Render(): string {
         $constructor = "";
 
         // Check if a table is specified
         if(StringHelpers::IsNullOrWhiteSpace($this->queryConstructor["2_FROM"])){
-            echo("You must specify a table, use the `Table` function to add a table to the constructor");
-            exit();
+            throw new InvalidArgumentException("No table is specified");
         }
 
         // Check the statement and run the correct constructor
