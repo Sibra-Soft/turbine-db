@@ -216,15 +216,24 @@ class QueryBuilderService implements IQueryBuilderService
                 }
 
                 $constructor .= " ";
+                $qalias = "";
+                $qcolumn = "";
+
+                if(StringHelpers::Contains($column, ".")){
+                    $qalias = StringHelpers::SplitString($column, ".", 0).".";
+                    $qcolumn = StringHelpers::SplitString($column, ".", 1);
+                }else{
+                    $qcolumn = $column;
+                }
 
                 // Check for specific operators
                 switch($operator){
                     case QueryOperatorsEnum::Like:
-                        $constructor .= "`$column` LIKE '%$value%'";
+                        $constructor .= "{$qalias}`{$qcolumn}` LIKE '%$value%'";
                         break;
 
                     default:
-                        $constructor .= "`$column` $operator '$value'";
+                        $constructor .= "{$qalias}`{$qcolumn}` {$operator} '{$value}'";
                         break;
                 }
 
