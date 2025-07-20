@@ -131,7 +131,7 @@ class DatabaseService {
      * @return bool|PDOStatement Object containing details of the execution
      */
     public function ExecuteQuery(string $query): PDOStatement {
-        $this->SetConnection();
+        $this->SetMysqlConnection();
 
         $queryToExecute = $this->doParameterReplacements($query);
         $this->query = $queryToExecute;
